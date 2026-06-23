@@ -1,0 +1,83 @@
+
+
+1. Product Name Configuration
+    
+    Common Data for all Product Names
+        Global - Attributes (Attribute Values and its type should be created)
+        Global - Accessory Headers
+        Global - Assembly
+        Global - SAP Extended View
+        Global - Category
+        Global - Sharepoint
+        Global - Status on CVP Drawing
+        Global - Plant
+
+    Product Name Specific Data
+        Global - Product Family
+
+        Global - Product Name
+            Circuit Size
+            Series
+            Description
+            DChain and XDChain status
+            Exploded Assembly Image Name
+            Top View Image File Name
+            Additional Information (if any)
+            Attribute and Attribute Values
+            Supplemental Drawinf Information (if any)
+            Drawing Template Part Number (if any)
+            Component Data or BOM Data
+            Assmebly Table's Category
+            Assembly Table Headers and Details
+            Cavity Template
+            Part Description Configuration
+            Request Image
+
+        Global - Duplicate Part Numbers (if any)
+
+        Global - Reference Number
+            Product Mapping
+            Plant
+            Plant SP status
+            Part status
+            Drawing Status
+            Accessories (if any)
+            Attribute Dependencies
+            BOM Configuration
+
+        Global - Mech Design Number
+            Mech Design Number
+            SAP Document Part Number
+            Product Mapping
+
+        Global - Documents and References (if any)
+            Document Number
+            Document Type (By default it is PSD - read only data)
+            Document Part Number
+
+        Global - Suffix and Increment Data
+            Product Mapping
+            Series (fetched from Product Name - read only data)
+            Minimum Suffix
+            Maximum Suffix
+            Increment
+            Dependencies (if any)
+
+
+
+2. Onboarding Product Name
+    All the above steps should be completed
+    Old CVP Requests data should be imported specific to the Product Name that is getting onboarded
+
+
+3. Teamcenter - QA/PROD
+    Mech Design Items
+        Latest Revision should be the Migrated Data
+        Latest Revision should be in Production
+        Latest Revision should not contains any Attachments
+
+
+4. NX
+    Mendix should have the proper data in JSON that will be constructed by the process in section 1
+    Section 3's rules should be followed
+    
