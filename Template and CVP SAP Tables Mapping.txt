@@ -2,3 +2,4 @@ Suffix and Increment Template.xlsx: Z9CNF_MATNR_CALC.xlsx
 Mech Design Numbers Template.xlsx: Z9DIR_PRDNAME.XLSX
 Old CVP Requests Template.xlsx: Old Requests List.xlsx
 Documents and References Template.xlsx: Z9DIR_CVP_PRDLNK.XLSX
+Reference Numbers Template.xlsx: Plant code mapped with Ref number.xlsx, Ref PN and Accessory Mapping.xlsx, drawing pdf's
