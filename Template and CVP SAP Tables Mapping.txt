@@ -3,3 +3,4 @@ Mech Design Numbers Template.xlsx: Z9DIR_PRDNAME.XLSX
 Old CVP Requests Template.xlsx: Old Requests List.xlsx
 Documents and References Template.xlsx: Z9DIR_CVP_PRDLNK.XLSX
 Reference Numbers Template.xlsx: Plant code mapped with Ref number.xlsx, Ref PN and Accessory Mapping.xlsx, drawing pdf's
+BOM Template.xlsx: CMX 32 CKT (34868).pdf, MX64 1X6 CKT (31403).pdf, MX123 49 CKT WDC (216744).pdf, MX150 2X10 BLD (33482).pdf, MX150 2X10 RCPT (33472).pdf, MXDASH 15+1 RCPT (218342).pdf
