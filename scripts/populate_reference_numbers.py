@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import pandas as pd
 import openpyxl
+import pdfplumber
 
 def clean_val(val):
     if pd.isna(val):
@@ -45,6 +46,78 @@ def format_accessory_material(val):
         if val_str in ("", "-", "nan", "NaN", "None"):
             return ""
         return val_str
+
+def clean_header(header):
+    if not header:
+        return ""
+    header = re.sub(r'\s+', ' ', header).strip()
+    header = header.replace("900", "90°")
+    return header
+
+def extract_pdf_accessories(pdf_path):
+    if not os.path.exists(pdf_path):
+        return {}, False
+    
+    part_accessories = {}
+    has_subheadings = False
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                if not tables:
+                    continue
+                for table in tables:
+                    if len(table) < 3:
+                        continue
+                    
+                    # Find the column index of COMMENT / COMMENTS in Row 0
+                    comments_col_idx = -1
+                    row0 = table[0]
+                    for c_idx, cell in enumerate(row0):
+                        if cell:
+                            cell_upper = str(cell).upper().strip()
+                            if cell_upper in ("COMMENT", "COMMENTS"):
+                                comments_col_idx = c_idx
+                                break
+                    
+                    # If comment column is found, the accessory columns are to the right of it
+                    if comments_col_idx != -1 and comments_col_idx < len(table[0]) - 1:
+                        start_col = comments_col_idx + 1
+                        
+                        # Subheadings are in Row 2
+                        subheading_row_idx = 2
+                        subheaders = table[subheading_row_idx][start_col:]
+                        cleaned_subheaders = [clean_header(sh) for sh in subheaders]
+                        
+                        # Check if any subheadings are present
+                        if any(cleaned_subheaders):
+                            has_subheadings = True
+                            
+                            # Process data rows
+                            for data_r_idx in range(subheading_row_idx + 1, len(table)):
+                                d_row = table[data_r_idx]
+                                # A valid data row should have assembly part number in col 1
+                                if len(d_row) > start_col and d_row[1] and str(d_row[1]).strip().isdigit():
+                                    part_num = str(d_row[1]).strip()
+                                    attachments = d_row[start_col:]
+                                    
+                                    parts_list = []
+                                    for sh, val in zip(cleaned_subheaders, attachments):
+                                        if sh and val and str(val).strip() not in ("N/A", "-", ""):
+                                            val_clean = str(val).strip()
+                                            cleaned_digits = re.sub(r'\D', '', val_clean)
+                                            if len(cleaned_digits) >= 9:
+                                                val_formatted = f"{cleaned_digits[:-4]}-{cleaned_digits[-4:]}"
+                                            else:
+                                                val_formatted = val_clean
+                                            parts_list.append(f"{sh}-{val_formatted}")
+                                    
+                                    if parts_list:
+                                        part_key = part_num.lstrip('0')
+                                        part_accessories[part_key] = ",".join(parts_list)
+    except Exception as e:
+        print(f"  Warning: Failed to extract accessories from PDF {os.path.basename(pdf_path)}: {e}")
+    return part_accessories, has_subheadings
 
 def main():
     # Define paths (resolved dynamically relative to script location)
@@ -125,8 +198,15 @@ def main():
         df_accessory = pd.read_excel(temp_accessory_path)
         print(f"Loaded {len(df_accessory)} rows from Ref PN and Accessory Mapping.xlsx successfully.")
     except Exception as e:
-        print(f"Error reading SAP Accessory Mappings data: {e}")
-        return
+        print(f"  Warning: Could not load Ref PN and Accessory Mapping.xlsx: {e}")
+        # Create a dummy DataFrame with all required columns
+        df_accessory = pd.DataFrame(columns=[
+            'Material', 'BACKSHELL WITH RIBS', 'BACKSHELL WITHOUT RIBS', 
+            'ADAPTOR WITH RIBS', 'ADAPTOR WITHOUT RIBS', 
+            'DRESS COVER BLACK', 'DRESS COVER BLACK2', 
+            'DRESS COVER BLACK3', 'DRESS COVER BLACK4', '90 BACKSHELL',
+            '90° ADAPTOR WITH RIBS', '90° ADAPTOR WITHOUT RIBS', '90° BACKSHELL'
+        ])
     finally:
         if os.path.exists(temp_accessory_path):
             try:
@@ -189,8 +269,8 @@ def main():
         'DRESS COVER BLACK4',
         '90° BACKSHELL'
     ]
-    df_accessory_subset = df_accessory[acc_columns_to_keep]
-    merged_df = pd.merge(df_plant, df_accessory_subset, on='join_key', how='inner', suffixes=('', '_acc'))
+    df_accessory_subset = df_accessory[[c for c in acc_columns_to_keep if c in df_accessory.columns]]
+    merged_df = pd.merge(df_plant, df_accessory_subset, on='join_key', how='left', suffixes=('', '_acc'))
 
     # Clean keys in merged_df and df_status to merge on Material and Plant Code
     merged_df['join_mat'] = merged_df['Material'].astype(str).str.strip().str.lstrip('0')
@@ -240,6 +320,14 @@ def main():
         
         print(f"\nProduct: {p_name} ({len(p_df)} row(s) found)")
         
+        # Load PDF accessories for this product
+        pdf_path = os.path.join(base_dir, "drawing pdf's", f"{p_name}.pdf")
+        pdf_acc_dict, has_subheadings = extract_pdf_accessories(pdf_path)
+        if has_subheadings:
+            print(f"  Accessory columns found in PDF. Loaded {len(pdf_acc_dict)} accessory mapping(s) from PDF (strictly using PDF).")
+        else:
+            print(f"  No accessory columns/subheadings found in PDF (falling back to Excel).")
+        
         # Determine output directory
         target_dir = product_dirs.get(p_name)
         if not target_dir:
@@ -262,14 +350,18 @@ def main():
                     dep_parts.append(f"{target_key}-{val}")
             dep_str = ",".join(dep_parts)
             
-            # Format accessory string
-            acc_parts = []
-            for acc_col in acc_cols:
-                val = row.get(acc_col)
-                formatted_val = format_accessory_material(val)
-                if formatted_val:
-                    acc_parts.append(f"{acc_col}-{formatted_val}")
-            acc_str = ",".join(acc_parts) if acc_parts else None
+            # Format accessory string (strict priority: PDF if subheadings exist, otherwise Excel)
+            mat_key = str(ref_num).strip().lstrip('0')
+            if has_subheadings:
+                acc_str = pdf_acc_dict.get(mat_key)
+            else:
+                acc_parts = []
+                for acc_col in acc_cols:
+                    val = row.get(acc_col)
+                    formatted_val = format_accessory_material(val)
+                    if formatted_val:
+                        acc_parts.append(f"{acc_col}-{formatted_val}")
+                acc_str = ",".join(acc_parts) if acc_parts else None
             plant_sp_status = clean_val(row.get('Plant-sp.matl status'))
 
             data_rows.append({
