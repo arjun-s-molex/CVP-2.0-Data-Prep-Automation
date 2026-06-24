@@ -88,6 +88,30 @@ PRODUCT_CATEGORIES = {
     ]
 }
 
+DEFAULT_ABBREV_FOR_CAT = {
+    'HOUSING': 'HSG',
+    'TPA-KEY-COLOR': 'TPA-1-BLACK',
+    'R-SEAL': 'R-SEAL',
+    'RSC': 'RSC',
+    'M-SEAL': 'M-SEAL',
+    'LEVER': 'LEVER',
+    'CONNECTOR HOUSING': 'C-HSG-A0',
+    'GROMMET CAP': 'GCO',
+    'TPA': 'TPA',
+    'RIGHT SLIDE': 'RS',
+    'LEFT SLIDE': 'LS',
+    'MATTE ASSIST LEVER': 'MAL',
+    'CPA': 'CPA',
+    'MAT SEAL': 'M',
+    'RING SEAL': 'R',
+    'HOUSING KEY/COLOR': 'A-BLACK',
+    'PLR': 'PLR',
+    'CON-HOUSING': 'HSG-A',
+    'TERMINAL HOUSING': 'TH',
+    'M-SEAL CAP': 'MSC-P',
+    'ISL': 'ISL'
+}
+
 def clean_val(val):
     if pd.isna(val):
         return ""
@@ -199,14 +223,14 @@ def parse_pdf_bom_data(pdf_path, p_name):
                             # Normalize housing abbreviation
                             normalized_housing = HOUSING_MAP.get(housing, housing)
                             pdf_data[ref_number] = {
-                                'HOUSING KEY/COLOR': normalized_housing,
-                                'GROMMET CAP': grommet,
-                                'PLR': plr,
-                                'CPA': cpa,
-                                'MAT SEAL': mat,
-                                'RING SEAL': ring
-                            }
-                            
+                                    'HOUSING KEY/COLOR': normalized_housing,
+                                    'GROMMET CAP': grommet,
+                                    'PLR': plr,
+                                    'CPA': cpa,
+                                    'MAT SEAL': mat,
+                                    'RING SEAL': ring
+                                }
+                                
                         elif p_name == 'CMX 32 CKT (34868)':
                             pdf_data[ref_number] = {
                                 'HOUSING': tokens[idx + 1],
@@ -264,9 +288,45 @@ def parse_pdf_bom_data(pdf_path, p_name):
         print(f"  Warning: Failed to extract BOM from PDF {os.path.basename(pdf_path)}: {e}")
     return pdf_data
 
+def parse_pdf_descriptions(pdf_path):
+    pdf_descriptions = {}
+    if not os.path.exists(pdf_path):
+        return pdf_descriptions
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            # We check Page 1 (index 0) where the component description table resides
+            if len(pdf.pages) > 0:
+                page = pdf.pages[0]
+                tables = page.extract_tables()
+                for table in tables:
+                    abbrev_col = -1
+                    desc_col = -1
+                    for row in table[:3]:
+                        row_upper = [str(c).upper().strip() if c else "" for c in row]
+                        if "ABBREVIATION" in row_upper and "DESCRIPTION" in row_upper:
+                            abbrev_col = row_upper.index("ABBREVIATION")
+                            desc_col = row_upper.index("DESCRIPTION")
+                            break
+                        row_str = " ".join(row_upper)
+                        if "ABBREVIATION" in row_str and "DESCRIPTION" in row_str:
+                            for c_idx, cell in enumerate(row_upper):
+                                if "ABBREVIATION" in cell: abbrev_col = c_idx
+                                if "DESCRIPTION" in cell: desc_col = c_idx
+                            break
+                            
+                    if abbrev_col != -1 and desc_col != -1:
+                        for row in table:
+                            if len(row) > max(abbrev_col, desc_col):
+                                abbrev = str(row[abbrev_col]).strip()
+                                desc = str(row[desc_col]).strip()
+                                if abbrev and desc and abbrev.upper() != "ABBREVIATION":
+                                    pdf_descriptions[abbrev] = desc
+    except Exception as e:
+        print(f"  Warning: Failed to extract description table from PDF {os.path.basename(pdf_path)}: {e}")
+    return pdf_descriptions
+
 def get_sort_key(pair):
     ref, plant = pair
-    # Try to convert to int for numeric sort, else leave as string
     try:
         plant_key = int(str(plant).strip())
     except ValueError:
@@ -277,7 +337,6 @@ def get_sort_key(pair):
     except ValueError:
         ref_key = str(ref).strip()
         
-    # Standardize sort keys to compare consistently (int vs string grouping)
     return (
         (0, plant_key) if isinstance(plant_key, int) else (1, str(plant_key)),
         (0, ref_key) if isinstance(ref_key, int) else (1, str(ref_key))
@@ -292,7 +351,7 @@ def main():
     template_path = os.path.join(base_dir, "template sheets", "product specific configs", "BOM Template.xlsx")
     family_base_dir = os.path.join(base_dir, "product family")
 
-    print("--- Starting BOM Generation Script (Plant Grouped) ---")
+    print("--- Starting BOM Generation Script (Plant Grouped & PDF Matched Sequence) ---")
 
     # 1. Read Product Names from Product Names for UAT1.txt
     if not os.path.exists(product_names_path):
@@ -352,19 +411,31 @@ def main():
     print("\nIndexing lookups...")
     lookup_db = {}
     for p_name in product_names:
-        sap_name = PRODUCT_MAP.get(p_name)
-        if not sap_name:
-            continue
-        sub_df = df_mat[df_mat["Product Name"] == sap_name]
-        lookup_db[p_name] = {}
+        sub_df = df_mat[df_mat["Product Name"] == p_name]
+        if len(sub_df) == 0:
+            sap_name = PRODUCT_MAP.get(p_name)
+            if sap_name:
+                sub_df = df_mat[df_mat["Product Name"] == sap_name]
+        lookup_db[p_name] = []
         for _, row in sub_df.iterrows():
             abbrev = str(row.get('Abbreviation', '')).strip().upper()
-            if abbrev:
-                lookup_db[p_name][abbrev] = {
-                    'Description': clean_val(row.get('Description')),
-                    'Color': clean_val(row.get('Color')),
-                    'Material': clean_val(row.get('Material'))
-                }
+            seq_val = row.get('Sequence No.')
+            desc_val = str(row.get('Description', '')).strip()
+            
+            seq_num = None
+            if pd.notna(seq_val):
+                try:
+                    seq_num = int(float(seq_val))
+                except (ValueError, TypeError):
+                    seq_num = str(seq_val)
+                    
+            lookup_db[p_name].append({
+                'Abbreviation': abbrev,
+                'Sequence No.': seq_num,
+                'Description': desc_val,
+                'Color': clean_val(row.get('Color')),
+                'Material': clean_val(row.get('Material'))
+            })
         print(f"  Indexed {len(lookup_db[p_name])} lookups for '{p_name}'")
 
     # 4. Populate templates for each product
@@ -415,10 +486,12 @@ def main():
         pairs_sorted = sorted(pairs, key=get_sort_key)
         print(f"\nProduct: {p_name} ({len(pairs_sorted)} reference number-plant pair(s) loaded)")
 
-        # Load PDF BOM data for this product
+        # Load PDF BOM data and Abbreviation descriptions table
         pdf_path = os.path.join(base_dir, "drawing pdf's", f"{p_name}.pdf")
         pdf_bom_data = parse_pdf_bom_data(pdf_path, p_name)
+        pdf_descriptions = parse_pdf_descriptions(pdf_path)
         print(f"  Loaded {len(pdf_bom_data)} reference number mapping(s) from drawing PDF.")
+        print(f"  Loaded {len(pdf_descriptions)} abbreviation description(s) from drawing PDF.")
 
         output_filepath = os.path.join(target_dir, "BOM.xlsx")
 
@@ -432,10 +505,8 @@ def main():
         data_rows = []
         for ref, plant in pairs_sorted:
             ref_str = str(ref).strip()
-            # Try matching with or without leading zeros/spaces
             pdf_ref_key = ref_str
             if pdf_ref_key not in pdf_bom_data:
-                # Fallback to matched keys using lstrip or similar
                 stripped_key = ref_str.lstrip('0')
                 for k in pdf_bom_data:
                     if k.lstrip('0') == stripped_key:
@@ -444,20 +515,83 @@ def main():
             
             ref_data = pdf_bom_data.get(pdf_ref_key, {})
             
-            for seq_idx, cat in enumerate(categories, start=1):
+            for cat in categories:
                 abbrev = ref_data.get(cat, "").strip()
-                abbrev_upper = abbrev.upper()
                 
-                # Check lookup
+                # Check mapping row
+                desc_pdf = None
+                if abbrev:
+                    desc_pdf = pdf_descriptions.get(abbrev)
+                    if not desc_pdf:
+                        abbrev_upper = abbrev.upper().strip()
+                        for k, v in pdf_descriptions.items():
+                            if k.upper().strip() == abbrev_upper:
+                                desc_pdf = v
+                                break
+
+                # Match Z9DIR_MAT_SHEET row
+                matched_row = None
+                
+                # 1. Match by BOTH Abbreviation and Description (Strongest Match)
+                if abbrev and desc_pdf:
+                    abbrev_upper = abbrev.upper().strip()
+                    desc_pdf_clean = "".join(desc_pdf.split()).upper()
+                    for row_dict in lookup_db.get(p_name, []):
+                        if row_dict['Abbreviation'] == abbrev_upper:
+                            desc_sheet_clean = "".join(row_dict['Description'].split()).upper()
+                            if desc_pdf_clean == desc_sheet_clean:
+                                matched_row = row_dict
+                                break
+                                
+                # 2. Match by Description from PDF only (if description available but abbreviation differs)
+                if not matched_row and desc_pdf:
+                    desc_pdf_clean = "".join(desc_pdf.split()).upper()
+                    for row_dict in lookup_db.get(p_name, []):
+                        desc_sheet_clean = "".join(row_dict['Description'].split()).upper()
+                        if desc_pdf_clean == desc_sheet_clean:
+                            matched_row = row_dict
+                            break
+                            
+                # 3. Fallback to matching by Abbreviation only (if description mismatch or not in PDF)
+                if not matched_row and abbrev:
+                    abbrev_upper = abbrev.upper().strip()
+                    for row_dict in lookup_db.get(p_name, []):
+                        if row_dict['Abbreviation'] == abbrev_upper:
+                            matched_row = row_dict
+                            break
+                            
+                # 4. Fallback for empty abbreviation: resolve sequence for category using default abbreviation
+                if not matched_row and not abbrev:
+                    default_abbrevs = [
+                        DEFAULT_ABBREV_FOR_CAT.get(cat),
+                        cat
+                    ]
+                    for def_a in default_abbrevs:
+                        if not def_a:
+                            continue
+                        def_a_upper = str(def_a).upper().strip()
+                        for row_dict in lookup_db.get(p_name, []):
+                            if row_dict['Abbreviation'] == def_a_upper:
+                                matched_row = row_dict
+                                break
+                        if matched_row:
+                            break
+
+                # Populate row fields
                 description = ""
                 color = ""
                 material = ""
+                sequence_no = ""
                 
-                if abbrev_upper and abbrev_upper in lookup_db.get(p_name, {}):
-                    item_lookup = lookup_db[p_name][abbrev_upper]
-                    description = item_lookup['Description']
-                    color = item_lookup['Color']
-                    material = item_lookup['Material']
+                if abbrev: # Write description/color/material only if abbreviation exists
+                    if matched_row:
+                        description = matched_row['Description']
+                        color = matched_row['Color']
+                        material = matched_row['Material']
+                        sequence_no = matched_row['Sequence No.']
+                else: # Only write sequence number for blank items
+                    if matched_row:
+                        sequence_no = matched_row['Sequence No.']
                 
                 data_rows.append({
                     'Category': cat,
@@ -465,8 +599,8 @@ def main():
                     'Description': description,
                     'Color': color,
                     'Material': material,
-                    'Sequence': seq_idx,
-                    'PartNumber': seq_idx,
+                    'Sequence': sequence_no,
+                    'PartNumber': sequence_no,
                     'Referencenumber': ref
                 })
 
@@ -476,7 +610,6 @@ def main():
                 try:
                     os.remove(output_filepath)
                 except Exception:
-                    # Attempt force remove with PowerShell
                     subprocess.run(["powershell", "-Command", f'Remove-Item -Path "{output_filepath}" -Force'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             # Copy template to target location using PowerShell lock-bypass and force overwrite
